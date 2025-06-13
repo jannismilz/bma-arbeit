@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/parquet"
-	// "github.com/xitongsys/parquet-go/source"
 	"github.com/xitongsys/parquet-go/writer"
 	"math"
 	"slices"
@@ -12,7 +11,7 @@ import (
 	"time"
 )
 
-var GOAL int = 1e6
+var GOAL int = 1e8
 var CHUNK_SIZE int = GOAL / 100
 
 // Sieve of Eratosthenes
@@ -71,17 +70,48 @@ func segmentedSieve(min int, max int, precomputedPrimes []int) []int {
 // Parallelize
 
 func isPrime(prime int, primeList []int) bool {
+	// Handle edge cases
+	if prime <= 1 {
+		return false
+	}
+	if prime == 2 || prime == 3 {
+		return true
+	}
+	if prime%2 == 0 || prime%3 == 0 {
+		return false
+	}
+
+	// Check if the number is in the precomputed list
+	if slices.Contains(primeList, prime) {
+		return true
+	}
+
+	// Check if the number is divisible by any precomputed prime
+	sqrtPrime := int(math.Sqrt(float64(prime)))
 	for _, precompPrime := range primeList {
+		if precompPrime > sqrtPrime {
+			break // No need to check beyond sqrt(prime)
+		}
 		if prime%precompPrime == 0 {
 			return false
+		}
+	}
+
+	// If we don't have enough precomputed primes, check up to sqrt(prime)
+	if len(primeList) > 0 && primeList[len(primeList)-1] < sqrtPrime {
+		for i := primeList[len(primeList)-1] + 2; i <= sqrtPrime; i += 2 {
+			if prime%i == 0 {
+				return false
+			}
 		}
 	}
 
 	return true
 }
 
-// // Check if twin prime
+// Check if twin prime
 func getNextTwinPrime(prime int, primeList []int) int {
+	// Check if prime+2 is a twin prime
 	if isPrime(prime+2, primeList) {
 		return prime + 2
 	}
@@ -89,27 +119,32 @@ func getNextTwinPrime(prime int, primeList []int) int {
 	return 0
 }
 
-// // Check if safe prime
+// Check if safe prime
 func isSafePrime(prime int, primeList []int) bool {
+	// A safe prime is a prime p where (p-1)/2 is also prime
+	// This second prime is called a Sophie Germain prime
 	safeCandidate := (prime - 1) / 2
 
-	if safeCandidate%2 == 0 || safeCandidate%5 == 0 {
-		return false
-	} else if slices.Contains(primeList, safeCandidate) {
-		return false
-	} else if isPrime(safeCandidate, primeList) {
+	// Quick check for obvious non-primes
+	if safeCandidate <= 1 {
 		return false
 	}
 
-	return true
+	// Check if the candidate is in the precomputed list
+	if slices.Contains(primeList, safeCandidate) {
+		return true
+	}
+
+	// Otherwise, check if it's prime
+	return isPrime(safeCandidate, primeList)
 }
 
-// // Check if Mersenne prime
+// Check if Mersenne prime
 func getNForMersenne(prime int) int {
 	return int(math.Log2(float64(prime + 1)))
 }
 
-// // Check digit sum in base
+// Check digit sum in base
 func getDigitSum(prime, base int) int {
 	if base < 2 {
 		panic("base must be >= 2")
@@ -130,9 +165,9 @@ type PrimeData struct {
 	Index          int32 `parquet:"name=index, type=INT32"`
 	Prime          int64 `parquet:"name=prime, type=INT64"`
 	GapToPrevious  int32 `parquet:"name=gap_to_previous, type=INT32"`
-	TwinPrime      int32 `parquet:"name=twin_prime, type=INT32, nullable=true"`
+	TwinPrime      int32 `parquet:"name=twin_prime, type=INT32"`
 	IsSafePrime    bool  `parquet:"name=is_safe_prime, type=BOOLEAN"`
-	MersenneK      int32 `parquet:"name=mersenne_k, type=INT32, nullable=true"`
+	MersenneK      int32 `parquet:"name=mersenne_k, type=INT32"`
 	DigitSumBase10 int32 `parquet:"name=digit_sum_base10, type=INT32"`
 	DigitSumBase2  int32 `parquet:"name=digit_sum_base2, type=INT32"`
 	DigitSumBase16 int32 `parquet:"name=digit_sum_base16, type=INT32"`
