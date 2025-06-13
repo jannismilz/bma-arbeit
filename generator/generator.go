@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -242,39 +243,72 @@ func GeneratePrimes() {
 	}
 	defer CloseParquetWriter(parquetWriter)
 
+	// Create a mutex for synchronizing writes to the parquet file
+	var writerMutex sync.Mutex
+
+	// Create a wait group to wait for all goroutines to finish
+	var wg sync.WaitGroup
+
+	// Create a semaphore to limit the number of concurrent goroutines
+	// to avoid overwhelming the system
+	maxConcurrent := 4 // Adjust based on the number of CPU cores
+	semaphore := make(chan struct{}, maxConcurrent)
+
 	total := 0
-	currentIndex := 0
+	var totalMutex sync.Mutex
 
+	// Process chunks in parallel
 	for chunkIndex, chunk := range chunks {
-		min, max := chunk[0], chunk[1]
-		fmt.Printf("Processing chunk %d/%d: [%d, %d]...\n", chunkIndex+1, len(chunks), min, max)
+		wg.Add(1)
 
-		// Generate primes for this chunk
-		primes := segmentedSieve(min, max, precomputedPrimes)
-		chunkSize := len(primes)
-		total += chunkSize
+		// Acquire semaphore
+		semaphore <- struct{}{}
 
-		// Map primes to their properties
-		fmt.Printf("Mapping properties for %d primes...\n", chunkSize)
-		primeData := mapPrimeProperties(primes, precomputedPrimes, currentIndex)
+		// Launch a goroutine to process this chunk
+		go func(index int, chunkRange [2]int) {
+			defer wg.Done()
+			defer func() { <-semaphore }() // Release semaphore when done
 
-		// Write this batch to the parquet file
-		fmt.Println("Writing batch to parquet file...")
-		err := WriteParquetBatch(parquetWriter, primeData)
-		if err != nil {
-			fmt.Printf("Error writing batch: %v\n", err)
-			return
-		}
+			min, max := chunkRange[0], chunkRange[1]
+			fmt.Printf("Processing chunk %d/%d: [%d, %d]...\n", index+1, len(chunks), min, max)
 
-		// Update the current index for the next chunk
-		currentIndex += chunkSize
+			// Generate primes for this chunk
+			primes := segmentedSieve(min, max, precomputedPrimes)
+			chunkSize := len(primes)
 
-		// Print progress
-		elapsed := time.Since(start).Seconds()
-		fmt.Printf("Progress: %d primes processed in %.2fs (%.2f primes/s)\n", total, elapsed, float64(total)/elapsed)
+			// Update total count (thread-safe)
+			totalMutex.Lock()
+			total += chunkSize
+			totalMutex.Unlock()
+
+			// Map primes to their properties
+			fmt.Printf("Mapping properties for %d primes in chunk %d...\n", chunkSize, index+1)
+			primeData := mapPrimeProperties(primes, precomputedPrimes, 0) // Index doesn't matter for now
+
+			// Write this batch to the parquet file (thread-safe)
+			fmt.Printf("Writing batch from chunk %d to parquet file...\n", index+1)
+			writerMutex.Lock()
+			err := WriteParquetBatch(parquetWriter, primeData)
+			writerMutex.Unlock()
+
+			if err != nil {
+				fmt.Printf("Error writing batch from chunk %d: %v\n", index+1, err)
+				return
+			}
+
+			// Print progress for this chunk
+			elapsed := time.Since(start).Seconds()
+			fmt.Printf("Chunk %d completed: %d primes processed in %.2fs\n", index+1, chunkSize, elapsed)
+		}(chunkIndex, chunk)
 	}
 
-	fmt.Printf("Completed! %d primes written to %s in %.2fs\n", total, outputFile, time.Since(start).Seconds())
+	// Wait for all goroutines to finish
+	wg.Wait()
+
+	// Print final statistics
+	elapsed := time.Since(start).Seconds()
+	fmt.Printf("Completed! %d primes written to %s in %.2fs (%.2f primes/s)\n",
+		total, outputFile, elapsed, float64(total)/elapsed)
 }
 
 // Helper function to get chunks for processing
