@@ -12,25 +12,22 @@ import (
 )
 
 var GOAL int = 1e8
-var CHUNK_SIZE int = GOAL / 100
+var CHUNK_SIZE int = GOAL / 10
 
 // Sieve of Eratosthenes
 func simpleSieve(limit int) []int {
 	potPrimes := make([]bool, limit+1)
+	var precomputedPrimes []int
 
 	for i := 2; i <= limit; i++ {
 		if potPrimes[i] == false {
-			// Schliesse alle Vielfachen von i aus
+			// This is a prime number, add it to our list
+			precomputedPrimes = append(precomputedPrimes, i)
+
+			// Mark all multiples of i as non-prime
 			for j := i * i; j <= limit; j += i {
 				potPrimes[j] = true
 			}
-		}
-	}
-
-	var precomputedPrimes []int
-	for i := 2; i <= limit; i++ {
-		if potPrimes[i] == false {
-			precomputedPrimes = append(precomputedPrimes, i)
 		}
 	}
 
