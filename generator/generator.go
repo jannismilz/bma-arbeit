@@ -1,15 +1,18 @@
 package generator
 
 import (
+	"fmt"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/parquet"
 	// "github.com/xitongsys/parquet-go/source"
 	"github.com/xitongsys/parquet-go/writer"
 	"math"
 	"slices"
+	"strconv"
+	"time"
 )
 
-var GOAL int = 1e7
+var GOAL int = 1e6
 var CHUNK_SIZE int = GOAL / 100
 
 // Sieve of Eratosthenes
@@ -176,3 +179,164 @@ func CloseParquetWriter(pw *writer.ParquetWriter) error {
 }
 
 // GOAL: 1e9 in under 5 seconds
+
+// GeneratePrimes generates prime numbers and their properties up to GOAL and writes them to a Parquet file
+func GeneratePrimes() {
+	start := time.Now()
+
+	fmt.Printf("Starting data generation with a goal of %d...\n", GOAL)
+
+	// Calculate the square root of GOAL for precomputation
+	upToSqrt := int(math.Sqrt(float64(GOAL))) + 1
+
+	fmt.Printf("Precomputing primes up to square root of goal: %d...\n", upToSqrt)
+
+	// Compute primes up to sqrt(GOAL) with simple sieve
+	precomputedPrimes := simpleSieve(upToSqrt)
+
+	fmt.Println("Split goal into chunks of ranges...")
+
+	// Create chunks for processing
+	chunks := getChunks(GOAL)
+
+	fmt.Printf("%d chunks of ranges computed...\n", len(chunks))
+
+	// Initialize the parquet writer
+	outputFile := "primes_data.parquet"
+	parquetWriter, err := CreateParquetWriter(outputFile)
+	if err != nil {
+		fmt.Printf("Error creating parquet writer: %v\n", err)
+		return
+	}
+	defer CloseParquetWriter(parquetWriter)
+
+	total := 0
+	currentIndex := 0
+
+	for chunkIndex, chunk := range chunks {
+		min, max := chunk[0], chunk[1]
+		fmt.Printf("Processing chunk %d/%d: [%d, %d]...\n", chunkIndex+1, len(chunks), min, max)
+
+		// Generate primes for this chunk
+		primes := segmentedSieve(min, max, precomputedPrimes)
+		chunkSize := len(primes)
+		total += chunkSize
+
+		// Map primes to their properties
+		fmt.Printf("Mapping properties for %d primes...\n", chunkSize)
+		primeData := mapPrimeProperties(primes, precomputedPrimes, currentIndex)
+
+		// Write this batch to the parquet file
+		fmt.Println("Writing batch to parquet file...")
+		err := WriteParquetBatch(parquetWriter, primeData)
+		if err != nil {
+			fmt.Printf("Error writing batch: %v\n", err)
+			return
+		}
+
+		// Update the current index for the next chunk
+		currentIndex += chunkSize
+
+		// Print progress
+		elapsed := time.Since(start).Seconds()
+		fmt.Printf("Progress: %d primes processed in %.2fs (%.2f primes/s)\n", total, elapsed, float64(total)/elapsed)
+	}
+
+	fmt.Printf("Completed! %d primes written to %s in %.2fs\n", total, outputFile, time.Since(start).Seconds())
+}
+
+// Helper function to get chunks for processing
+func getChunks(limit int) [][2]int {
+	var ranges [][2]int
+	size := CHUNK_SIZE
+	start := 2
+
+	for start < limit {
+		end := int(math.Min(float64(start+size), float64(limit)))
+		ranges = append(ranges, [2]int{start, end})
+		start += size
+	}
+
+	return ranges
+}
+
+// mapPrimeProperties maps each prime number to its properties
+func mapPrimeProperties(primes []int, precomputedPrimes []int, startIndex int) []PrimeData {
+	data := make([]PrimeData, 0, len(primes))
+
+	// Set the previous prime for gap calculation
+	prevPrime := 2
+	if startIndex > 0 && len(precomputedPrimes) > 0 {
+		prevPrime = precomputedPrimes[len(precomputedPrimes)-1]
+	}
+
+	for i, prime := range primes {
+		// Create a new PrimeData instance
+		pd := PrimeData{
+			Index:         int32(startIndex + i),
+			Prime:         int64(prime),
+			GapToPrevious: int32(prime - prevPrime),
+		}
+
+		// Update previous prime for next iteration
+		prevPrime = prime
+
+		// Check for twin prime
+		twinPrime := getNextTwinPrime(prime, precomputedPrimes)
+		if twinPrime != 0 {
+			pd.TwinPrime = int32(twinPrime)
+		}
+
+		// Check if safe prime
+		pd.IsSafePrime = isSafePrime(prime, precomputedPrimes)
+
+		// Check if Mersenne prime
+		n := getNForMersenne(prime)
+		if (1<<n)-1 == prime {
+			pd.MersenneK = int32(n)
+		}
+
+		// Calculate digit sums
+		pd.DigitSumBase10 = int32(getDigitSumBase10(prime))
+		pd.DigitSumBase2 = int32(getDigitSumBase2(prime))
+		pd.DigitSumBase16 = int32(getDigitSumBase16(prime))
+
+		// Add to data slice
+		data = append(data, pd)
+	}
+
+	return data
+}
+
+// getDigitSumBase10 calculates the sum of digits in base 10
+func getDigitSumBase10(n int) int {
+	sum := 0
+	for n > 0 {
+		sum += n % 10
+		n /= 10
+	}
+	return sum
+}
+
+// getDigitSumBase2 calculates the sum of digits in base 2 (binary)
+func getDigitSumBase2(n int) int {
+	return getDigitSum(n, 2)
+}
+
+// getDigitSumBase16 calculates the sum of digits in base 16 (hex)
+func getDigitSumBase16(n int) int {
+	sum := 0
+	hexStr := strconv.FormatInt(int64(n), 16)
+
+	for _, ch := range hexStr {
+		if ch >= '0' && ch <= '9' {
+			sum += int(ch - '0')
+		} else if ch >= 'a' && ch <= 'f' {
+			sum += int(ch - 'a' + 10)
+		} else if ch >= 'A' && ch <= 'F' {
+			sum += int(ch - 'A' + 10)
+		}
+	}
+
+	return sum
+}
