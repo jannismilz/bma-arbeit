@@ -289,7 +289,7 @@ func getChunks(limit int) [][2]int {
 }
 
 func mapPrimeProperties(primes []int, precomputedPrimes []int, startIndex int) []PrimeData {
-	data := make([]PrimeData, 0, len(primes))
+	data := make([]PrimeData, len(primes))
 
 	// Set the previous prime for gap calculation
 	prevPrime := 2
@@ -298,11 +298,10 @@ func mapPrimeProperties(primes []int, precomputedPrimes []int, startIndex int) [
 	}
 
 	for i, prime := range primes {
-		pd := PrimeData{
-			Index:         int32(startIndex + i),
-			Prime:         int64(prime),
-			GapToPrevious: int32(prime - prevPrime),
-		}
+		pd := &data[i]
+		pd.Index = int32(startIndex + i)
+		pd.Prime = int64(prime)
+		pd.GapToPrevious = int32(prime - prevPrime)
 
 		prevPrime = prime
 
@@ -321,8 +320,6 @@ func mapPrimeProperties(primes []int, precomputedPrimes []int, startIndex int) [
 		pd.DigitSumBase10 = int32(getDigitSumBase10(prime))
 		pd.DigitSumBase2 = int32(getDigitSumBase2(prime))
 		pd.DigitSumBase16 = int32(getDigitSumBase16(prime))
-
-		data = append(data, pd)
 	}
 
 	return data
