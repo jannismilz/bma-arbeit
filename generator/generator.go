@@ -14,8 +14,9 @@ import (
 )
 
 // GOAL: 1e9 in under 5 seconds
-var GOAL int = 1e8
-var CHUNK_SIZE int = GOAL / 10
+var GOAL int = 1e9
+var upToSqrt int = int(math.Sqrt(float64(GOAL))) + 1
+var CHUNK_SIZE int = GOAL / 100
 
 func simpleSieve(limit int) []int {
 	potPrimes := make([]bool, limit+1)
@@ -75,11 +76,13 @@ func isPrime(prime int, primeList []int) bool {
 		return false
 	}
 
-	if slices.Contains(primeList, prime) {
-		return true
+	if prime <= upToSqrt {
+		if slices.Contains(primeList, prime) {
+			return true
+		}
 	}
 
-	sqrtPrime := int(math.Sqrt(float64(prime)))
+	sqrtPrime := upToSqrt - 1
 	for _, precompPrime := range primeList {
 		if precompPrime > sqrtPrime {
 			break // No need to check beyond sqrt(prime)
@@ -192,8 +195,6 @@ func GeneratePrimes() {
 
 	fmt.Printf("Starting data generation with a goal of %d...\n", GOAL)
 
-	upToSqrt := int(math.Sqrt(float64(GOAL))) + 1
-
 	fmt.Printf("Precomputing primes up to square root of goal: %d...\n", upToSqrt)
 
 	precomputedPrimes := simpleSieve(upToSqrt)
@@ -289,7 +290,11 @@ func getChunks(limit int) [][2]int {
 }
 
 func mapPrimeProperties(primes []int, precomputedPrimes []int, startIndex int) []PrimeData {
+	// Pre-allocate the result slice
 	data := make([]PrimeData, len(primes))
+
+	// Convert startIndex to int32 once to avoid repeated conversions
+	int32StartIndex := int32(startIndex)
 
 	// Set the previous prime for gap calculation
 	prevPrime := 2
@@ -297,29 +302,49 @@ func mapPrimeProperties(primes []int, precomputedPrimes []int, startIndex int) [
 		prevPrime = precomputedPrimes[len(precomputedPrimes)-1]
 	}
 
-	for i, prime := range primes {
-		pd := &data[i]
-		pd.Index = int32(startIndex + i)
-		pd.Prime = int64(prime)
-		pd.GapToPrevious = int32(prime - prevPrime)
-
-		prevPrime = prime
-
-		twinPrime := getNextTwinPrime(prime, precomputedPrimes)
-		if twinPrime != 0 {
-			pd.TwinPrime = int32(twinPrime)
+	// Process in batches for better cache locality
+	batchSize := 1024
+	for batchStart := 0; batchStart < len(primes); batchStart += batchSize {
+		batchEnd := batchStart + batchSize
+		if batchEnd > len(primes) {
+			batchEnd = len(primes)
 		}
 
-		pd.IsSafePrime = isSafePrime(prime, precomputedPrimes)
-
-		n := getNForMersenne(prime)
-		if (1<<n)-1 == prime {
-			pd.MersenneK = int32(n)
+		// First pass: calculate indices, primes, and gaps (the expensive operations)
+		for i := batchStart; i < batchEnd; i++ {
+			prime := primes[i]
+			pd := &data[i]
+			pd.Index = int32StartIndex + int32(i)
+			pd.Prime = int64(prime)
+			pd.GapToPrevious = int32(prime - prevPrime)
+			prevPrime = prime
 		}
 
-		pd.DigitSumBase10 = int32(getDigitSumBase10(prime))
-		pd.DigitSumBase2 = int32(getDigitSumBase2(prime))
-		pd.DigitSumBase16 = int32(getDigitSumBase16(prime))
+		// Second pass: calculate other properties
+		for i := batchStart; i < batchEnd; i++ {
+			prime := primes[i]
+			pd := &data[i]
+
+			// Twin prime calculation
+			twinPrime := getNextTwinPrime(prime, precomputedPrimes)
+			if twinPrime != 0 {
+				pd.TwinPrime = int32(twinPrime)
+			}
+
+			// Safe prime calculation
+			pd.IsSafePrime = isSafePrime(prime, precomputedPrimes)
+
+			// Mersenne prime calculation
+			n := getNForMersenne(prime)
+			if (1<<n)-1 == prime {
+				pd.MersenneK = int32(n)
+			}
+
+			// Digit sum calculations
+			pd.DigitSumBase10 = int32(getDigitSumBase10(prime))
+			pd.DigitSumBase2 = int32(getDigitSumBase2(prime))
+			pd.DigitSumBase16 = int32(getDigitSumBase16(prime))
+		}
 	}
 
 	return data
