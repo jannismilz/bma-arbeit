@@ -1,11 +1,14 @@
 package generator
 
 import (
+	"database/sql"
 	"fmt"
+	_ "github.com/marcboeker/go-duckdb"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/parquet"
 	"github.com/xitongsys/parquet-go/writer"
 	"math"
+	"os"
 	"runtime"
 	"slices"
 	"strconv"
@@ -195,6 +198,8 @@ func GeneratePrimes() {
 
 	fmt.Printf("Starting data generation with a goal of %d...\n", GOAL)
 
+	upToSqrt := int(math.Sqrt(float64(GOAL))) + 1
+
 	fmt.Printf("Precomputing primes up to square root of goal: %d...\n", upToSqrt)
 
 	precomputedPrimes := simpleSieve(upToSqrt)
@@ -205,7 +210,7 @@ func GeneratePrimes() {
 
 	fmt.Printf("%d chunks of ranges computed...\n", len(chunks))
 
-	outputFile := "primes_data.parquet"
+	outputFile := "primes_data_unsorted.parquet"
 	parquetWriter, err := CreateParquetWriter(outputFile)
 	if err != nil {
 		fmt.Printf("Error creating parquet writer: %v\n", err)
@@ -273,6 +278,43 @@ func GeneratePrimes() {
 	elapsed := time.Since(start).Seconds()
 	fmt.Printf("Completed! %d primes written to %s in %.2fs (%.2f primes/s)\n",
 		total, outputFile, elapsed, float64(total)/elapsed)
+
+	// Sort the final Parquet file using DuckDB
+	fmt.Println("Sorting the final Parquet file using DuckDB...")
+	sortParquetFile(outputFile, "primes_data.parquet")
+
+	// Remove the unsorted file
+	err = os.Remove(outputFile)
+	if err != nil {
+		fmt.Printf("Warning: Could not remove unsorted file: %v\n", err)
+	} else {
+		fmt.Println("Removed unsorted file.")
+	}
+
+	finalElapsed := time.Since(start).Seconds()
+	fmt.Printf("All done! Total time: %.2fs\n", finalElapsed)
+}
+
+// sortParquetFile uses DuckDB Go library to sort a Parquet file by the prime column
+func sortParquetFile(inputFile, outputFile string) error {
+	// Open a new database connection (in-memory)
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		return fmt.Errorf("failed to open DuckDB connection: %v", err)
+	}
+	defer db.Close()
+
+	// Create a query to read from the input Parquet file, sort by prime, and write to the output Parquet file
+	query := fmt.Sprintf("COPY (SELECT * FROM '%s' ORDER BY prime) TO '%s' (FORMAT PARQUET);", inputFile, outputFile)
+
+	// Execute the query
+	_, err = db.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to execute DuckDB query: %v", err)
+	}
+
+	fmt.Println("Parquet file sorted successfully.")
+	return nil
 }
 
 func getChunks(limit int) [][2]int {
